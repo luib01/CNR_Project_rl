@@ -102,7 +102,7 @@ class QuantCircuitEnv(gym.Env):
         self.X_test=X_test
         self.Y_test=Y_test
         self.feature_map = feature_map
-        self.qcircuit.compose(self.feature_map, inplace=True)
+        
         
         self.step_count=0
         # Initialise current/goal statevectors
@@ -158,19 +158,24 @@ class QuantCircuitEnv(gym.Env):
     def kernel_creation(self):
         sampler=Sampler()
         fidelity=ComputeUncompute(sampler=sampler)
+        print('FEATURE MAP:')
+        print(self.feature_map)
         kernel=FidelityQuantumKernel(feature_map=self.feature_map,fidelity=fidelity)
-        print('il numero di features sono:'+str(kernel.num_features))
+        kernel_matrix = kernel.evaluate(self.X_train)
+    
+        # Stampa la matrice del kernel
+        print('Matrice del kernel:')
+        print(kernel_matrix)
+        
+        # Stampa il numero di features del kernel
+        print('Il numero di features è:', str(kernel.num_features))
+        
+    
         
         return kernel
 
-    def reset(self):
-        """
-        Resets the circuit to empty and any relevant variables to their initial state
-
-        Return:
-            diff (list): real and imaginary parts of the current reset quantum state/unitary
-
-        """
+    """def reset(self):
+        
 
         self.qcircuit = QuantumCircuit(self.q_reg)
         self.current_state = [1+0j]+[0+0j]*(2**self.num_qubits-1)
@@ -186,6 +191,43 @@ class QuantCircuitEnv(gym.Env):
         else:
             diff = self.comp_goal - self.comp_state
 
+        return diff
+    """
+    def reset(self):
+    
+
+        # Reset the quantum circuit to a clean state with initialized qubits
+        self.qcircuit = QuantumCircuit(self.q_reg)
+
+        # Reset the feature map (optional, if it's part of the circuit structure)
+        
+
+        # Reset the current state/unitary to the initial state
+        self.current_state = Statevector.from_label('0' * self.num_qubits)
+        self.current_unitary = qeye(2**self.num_qubits).full()  # Identity matrix as the initial unitary
+
+        # Reset the classical state used to compute differences
+        self.comp_state = np.append(np.real(self.current_state.data), np.imag(self.current_state.data))
+
+        # Reset counter for gates and steps used by the agent
+        self.gate_count = 0
+        self.step_count = 0
+
+        # Reset the agent's accuracy tracking
+        self.previous_accuracy = None
+
+        # Reset the flag for checking if the environment has been initialized
+        self.has_run = False
+
+        # Choose a new goal state/unitary if dynamic objectives are needed
+        # (Optional: you can introduce variation in the goal if required)
+        if self.is_unitary:
+            diff = np.asarray(self.goal_unitary - self.current_unitary).flatten()
+            diff = np.append(np.real(diff), np.imag(diff))
+        else:
+            diff = self.comp_goal - self.comp_state
+
+        # Return the difference (the state that the agent is working to minimize)
         return diff
     
     def step(self, action):
@@ -256,27 +298,58 @@ class QuantCircuitEnv(gym.Env):
             reward = 50 * (1 / (self.gate_count + 1))
             done = True
         """
-        if self.step_count>20:
-            accuracy=self.evaluate_circuit()
-            if accuracy >= 0.9:
-                reward = 4
-            elif accuracy < 0.9 and accuracy >= 0.7:
-                reward = 3
-            elif accuracy < 0.7 and accuracy >= 0.6:
-                reward = 2
-            elif accuracy < 0.6 and accuracy >= 0.5:
-                reward = 1
-            elif accuracy < 0.5 and accuracy >= 0.4:
-                reward = -1
-            elif accuracy < 0.4 and accuracy >= 0.3:
-                reward = -2
-            elif accuracy < 0.3 and accuracy >= 0.2:
-                reward = -3
+        self.feature_map=self.feature_map.compose(self.qcircuit, inplace=False)
+        
+        #self.feature_map.decompose().draw(output='mpl')
+        
+        print(self.feature_map)
+        
+        
+        
+        # Evaluate circuit accuracy
+       
+
+        # Reward based on accuracy
+        if self.step_count > 5:
+            accuracy = self.evaluate_circuit()
+            """if hasattr(self, 'previous_accuracy'):
+                improvement = accuracy - self.previous_accuracy
+                if improvement > 0:
+                    reward += improvement * 10  # Encourage accuracy improvements
             else:
-                reward = -4
-            
-        self.render()
-        print("La reward è:"+str(reward))
+                # Initialize previous_accuracy on the first step
+                self.previous_accuracy = accuracy
+            """
+
+            # Continuous reward based on accuracy improvement
+            if accuracy >= 0.9:
+                reward += 10 * accuracy
+            elif accuracy >= 0.8:
+                reward += 5 * accuracy
+            elif accuracy >= 0.7:
+                reward += 2 * accuracy
+            elif accuracy >= 0.6:
+                reward += accuracy
+            else:
+                reward -= 5 * (0.6 - accuracy)
+
+            # Encourage fewer steps by adding a step penalty after a certain threshold
+            if self.step_count > 20:
+                reward -= (self.step_count - 20) * 0.1  # Small penalty for each step beyond step 20
+
+            # Update previous accuracy for next step comparison
+            self.previous_accuracy = accuracy
+
+            # Terminate episode if accuracy reaches a threshold
+            print('la reward è:'+str(reward))
+            if accuracy >= 0.95:
+                done = True
+                print(f"Episode finished! Achieved accuracy of {accuracy}")
+
+            # Terminate after maximum number of steps
+            if self.step_count >= 5:  # Set a maximum number of steps
+                done = True
+                print("Episode finished due to step limit.")
 
         return diff, reward, done, {'fidelity': round(self.fidelity(), 3)}
 
@@ -801,14 +874,21 @@ class QuantCircuitEnv(gym.Env):
         print(f"Accuracy: {accuracy * 100}%")
         return accuracy
         """
-        qsvc = QSVC(quantum_kernel=self.kernel_creation())
+        print(self.Y_test)
+        qsvc = QSVC(quantum_kernel=self.kernel_creation(),decision_function_shape='ovo',)
 
         qsvc.fit(self.X_train, self.Y_train)
+        predict=qsvc.predict(self.X_test)
+        #print(predict)
+        #print(self.Y_test)
+        
 
-        qsvc_score = qsvc.score(self.X_test, self.Y_test)
+        qsvc_score_train = qsvc.score(self.X_train, self.Y_train)
+        qsvc_score_test = qsvc.score(self.X_test, self.Y_test)
 
-        print(f"QSVC classification test score: {qsvc_score}")
-        return qsvc_score
+        print(f"QSVC classification train score: {qsvc_score_train}")
+        print(f"QSVC classification test score: {qsvc_score_test}")
+        return qsvc_score_test
         
 """def make_curriculum(self, num_gates, loop_list=None):
         
