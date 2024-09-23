@@ -9,11 +9,16 @@ from qiskit import QuantumRegister, QuantumCircuit,transpile
 from qutip import qeye, basis, Qobj, fidelity
 from qutip.qip.operations import hadamard_transform
 from qutip.qip.qubits import qubit_states
+from qiskit.circuit import Parameter
 from qiskit_machine_learning.algorithms import VQC
 from qiskit_algorithms.optimizers import COBYLA
 from qiskit.circuit.library import ZFeatureMap
-from qiskit_machine_learning.kernels import FidelityQuantumKernel
+from qiskit_machine_learning.kernels import FidelityQuantumKernel,BaseKernel
+from qiskit_algorithms.optimizers import SPSA
+from qiskit_machine_learning.kernels import TrainableFidelityQuantumKernel
+from qiskit_machine_learning.kernels.algorithms import QuantumKernelTrainer
 from qiskit_algorithms.state_fidelities import ComputeUncompute
+from qiskit.circuit.library import ZZFeatureMap
 from qiskit.primitives import Sampler
 #from qiskit.utils import QuantumInstance
 from qutip.core.metrics import tracedist
@@ -26,9 +31,35 @@ import numpy as np
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
 import networkx as nx
+
 from typing import Dict
 
+class QKTCallback:
+    """Callback wrapper class."""
 
+    def __init__(self) -> None:
+        self._data = [[] for i in range(5)]
+
+    def callback(self, x0, x1=None, x2=None, x3=None, x4=None):
+        """
+        Args:
+            x0: number of function evaluations
+            x1: the parameters
+            x2: the function value
+            x3: the stepsize
+            x4: whether the step was accepted
+        """
+        self._data[0].append(x0)
+        self._data[1].append(x1)
+        self._data[2].append(x2)
+        self._data[3].append(x3)
+        self._data[4].append(x4)
+
+    def get_callback_data(self):
+        return self._data
+
+    def clear_callback_data(self):
+        self._data = [[] for i in range(5)]
 class QuantCircuitEnv(gym.Env):
     """
     A quantum circuit implementation using the Qiskit library, containing methods to construct
@@ -104,6 +135,7 @@ class QuantCircuitEnv(gym.Env):
         self.feature_map = feature_map
         
         
+        
         self.step_count=0
         # Initialise current/goal statevectors
         self.current_state = [1+0j] + [0+0j]*(self.dimension - 1)
@@ -156,11 +188,12 @@ class QuantCircuitEnv(gym.Env):
         plt.show()
         
     def kernel_creation(self):
+        self.qcircuit.append(self.feature_map, range(self.num_qubits))
         sampler=Sampler()
         fidelity=ComputeUncompute(sampler=sampler)
         print('FEATURE MAP:')
-        print(self.feature_map)
-        kernel=FidelityQuantumKernel(feature_map=self.feature_map,fidelity=fidelity)
+        print(self.qcircuit)
+        kernel=FidelityQuantumKernel(feature_map=self.qcircuit,fidelity=fidelity)
         kernel_matrix = kernel.evaluate(self.X_train)
     
         # Stampa la matrice del kernel
@@ -173,6 +206,8 @@ class QuantCircuitEnv(gym.Env):
     
         
         return kernel
+    
+    
 
     """def reset(self):
         
@@ -198,6 +233,7 @@ class QuantCircuitEnv(gym.Env):
 
         # Reset the quantum circuit to a clean state with initialized qubits
         self.qcircuit = QuantumCircuit(self.q_reg)
+        #self.qcircuit.append(self.feature_map, range(self.num_qubits))
 
         # Reset the feature map (optional, if it's part of the circuit structure)
         
@@ -246,6 +282,7 @@ class QuantCircuitEnv(gym.Env):
             measures (dict): dictionary containing the measure used to determine reward
 
         """
+        print(self.qcircuit)
         self.qcircuit.draw()
         if not self.has_run:
             self.set_gate_group(self.gate_group)
@@ -280,8 +317,10 @@ class QuantCircuitEnv(gym.Env):
 
         # Unitary case
         if self.is_unitary:
-            self.job = transpile(self.qcircuit, backend=UnitarySimulator())
-            self.current_unitary = self.job.result().get_unitary(self.qcircuit)
+
+            circuit_transpiled = transpile(self.qcircuit, backend=UnitarySimulator())
+            self.job=UnitarySimulator().run(circuit_transpiled)
+            self.current_unitary = self.job.result().get_unitary(circuit_transpiled)
             diff = np.asarray(self.goal_unitary - self.current_unitary).flatten()
             diff = np.append(np.real(diff), np.imag(diff))
         # Statevector case
@@ -298,11 +337,18 @@ class QuantCircuitEnv(gym.Env):
             reward = 50 * (1 / (self.gate_count + 1))
             done = True
         """
-        self.feature_map=self.feature_map.compose(self.qcircuit, inplace=False)
+        
+        #self.feature_map.compose(self.qcircuit, inplace=True)
+        
+        
+        
+        
+
         
         #self.feature_map.decompose().draw(output='mpl')
         
-        print(self.feature_map)
+        print("Step count: ", self.step_count)
+        print(self.qcircuit)
         
         
         
@@ -310,44 +356,28 @@ class QuantCircuitEnv(gym.Env):
        
 
         # Reward based on accuracy
-        if self.step_count > 5:
+        if self.step_count > 10:
             accuracy = self.evaluate_circuit()
-            """if hasattr(self, 'previous_accuracy'):
-                improvement = accuracy - self.previous_accuracy
-                if improvement > 0:
-                    reward += improvement * 10  # Encourage accuracy improvements
-            else:
-                # Initialize previous_accuracy on the first step
-                self.previous_accuracy = accuracy
-            """
 
-            # Continuous reward based on accuracy improvement
-            if accuracy >= 0.9:
-                reward += 10 * accuracy
-            elif accuracy >= 0.8:
-                reward += 5 * accuracy
-            elif accuracy >= 0.7:
-                reward += 2 * accuracy
-            elif accuracy >= 0.6:
-                reward += accuracy
-            else:
-                reward -= 5 * (0.6 - accuracy)
+            # Applica una funzione sigmoide all'accuratezza per ottenere la reward
+            reward = 10 * (1 / (1 + np.exp(-10 * (accuracy - 0.75))))  # Sigmoide centrata intorno a 0.75
 
-            # Encourage fewer steps by adding a step penalty after a certain threshold
+            # Penalizza per il numero di step
             if self.step_count > 20:
-                reward -= (self.step_count - 20) * 0.1  # Small penalty for each step beyond step 20
+                reward -= (self.step_count - 20) * 0.1
 
-            # Update previous accuracy for next step comparison
+            # Aggiorna la precisione precedente
             self.previous_accuracy = accuracy
 
-            # Terminate episode if accuracy reaches a threshold
+            # Termina l'episodio se l'accuratezza raggiunge una soglia
             print('la reward è:'+str(reward))
             if accuracy >= 0.95:
                 done = True
                 print(f"Episode finished! Achieved accuracy of {accuracy}")
 
-            # Terminate after maximum number of steps
-            if self.step_count >= 5:  # Set a maximum number of steps
+            # Termina l'episodio dopo un massimo numero di step
+            if self.step_count >= 10:  # Set a maximum number of steps
+
                 done = True
                 print("Episode finished due to step limit.")
 
@@ -874,9 +904,10 @@ class QuantCircuitEnv(gym.Env):
         print(f"Accuracy: {accuracy * 100}%")
         return accuracy
         """
-        print(self.Y_test)
-        qsvc = QSVC(quantum_kernel=self.kernel_creation(),decision_function_shape='ovo',)
 
+       
+        print(self.Y_test)
+        qsvc = QSVC(quantum_kernel=self.kernel_creation())
         qsvc.fit(self.X_train, self.Y_train)
         predict=qsvc.predict(self.X_test)
         #print(predict)
