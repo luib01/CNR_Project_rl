@@ -177,6 +177,8 @@ class QuantCircuitEnv(gym.Env):
         self.num_actions = self.num_qubits*6
         self.EPS = 1e-10
         self.has_run = False
+        self.goal_accuracy = 0.97
+        self.previous_accuracy=0
 
     
     
@@ -324,11 +326,14 @@ class QuantCircuitEnv(gym.Env):
             diff = np.asarray(self.goal_unitary - self.current_unitary).flatten()
             diff = np.append(np.real(diff), np.imag(diff))
         # Statevector case
+        """
         else:
             self.job = transpile(self.qcircuit, backend=StatevectorSimulator())
             self.current_state = Statevector(self.qcircuit)
             self.comp_state = np.append(np.real(self.current_state), np.imag(self.current_state))
             diff = self.comp_goal - self.comp_state
+        """
+            
 
         reward = 0
 
@@ -353,11 +358,11 @@ class QuantCircuitEnv(gym.Env):
         
         
         # Evaluate circuit accuracy
-       
-
+        diff=0
         # Reward based on accuracy
-        if self.step_count > 10:
+        if self.step_count > 5:
             accuracy = self.evaluate_circuit()
+            self.has_run=True
 
             # Applica una funzione sigmoide all'accuratezza per ottenere la reward
             reward = 10 * (1 / (1 + np.exp(-10 * (accuracy - 0.75))))  # Sigmoide centrata intorno a 0.75
@@ -371,15 +376,14 @@ class QuantCircuitEnv(gym.Env):
 
             # Termina l'episodio se l'accuratezza raggiunge una soglia
             print('la reward è:'+str(reward))
-            if accuracy >= 0.95:
-                done = True
-                print(f"Episode finished! Achieved accuracy of {accuracy}")
 
             # Termina l'episodio dopo un massimo numero di step
-            if self.step_count >= 10:  # Set a maximum number of steps
+            if self.step_count >= 5:  # Set a maximum number of steps
 
                 done = True
                 print("Episode finished due to step limit.")
+                
+                diff = self.goal_accuracy - accuracy
 
         return diff, reward, done, {'fidelity': round(self.fidelity(), 3)}
 
@@ -590,7 +594,7 @@ class QuantCircuitEnv(gym.Env):
                 gate_qubits = gate_qubit_map.get(name, 1)  # Default a 1 qubit se non trovato
 
                 # Stampa il numero di qubit per debug
-                print("Numero di qubit per la porta", name, ":", gate_qubits)
+                
 
             # Gestione per porte multi-qubit
             if gate_qubits > 1:
@@ -905,20 +909,22 @@ class QuantCircuitEnv(gym.Env):
         return accuracy
         """
 
-       
-        print(self.Y_test)
-        qsvc = QSVC(quantum_kernel=self.kernel_creation())
-        qsvc.fit(self.X_train, self.Y_train)
-        predict=qsvc.predict(self.X_test)
-        #print(predict)
-        #print(self.Y_test)
-        
+        if self.has_run:
+            print(self.Y_test)
+            qsvc = QSVC(quantum_kernel=self.kernel_creation())
+            qsvc.fit(self.X_train, self.Y_train)
+            predict=qsvc.predict(self.X_test)
+            #print(predict)
+            #print(self.Y_test)
+            
 
-        qsvc_score_train = qsvc.score(self.X_train, self.Y_train)
-        qsvc_score_test = qsvc.score(self.X_test, self.Y_test)
+            qsvc_score_train = qsvc.score(self.X_train, self.Y_train)
+            qsvc_score_test = qsvc.score(self.X_test, self.Y_test)
 
-        print(f"QSVC classification train score: {qsvc_score_train}")
-        print(f"QSVC classification test score: {qsvc_score_test}")
+            print(f"QSVC classification train score: {qsvc_score_train}")
+            print(f"QSVC classification test score: {qsvc_score_test}")
+            self.previous_accuracy=qsvc_score_test
+            self.has_run=False
         return qsvc_score_test
         
 """def make_curriculum(self, num_gates, loop_list=None):
