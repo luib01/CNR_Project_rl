@@ -19,6 +19,7 @@ from qiskit_machine_learning.kernels import TrainableFidelityQuantumKernel
 from qiskit_machine_learning.kernels.algorithms import QuantumKernelTrainer
 from qiskit_algorithms.state_fidelities import ComputeUncompute
 from qiskit.circuit.library import ZZFeatureMap
+from qiskit_aer.noise import NoiseModel,depolarizing_error
 from qiskit.primitives import Sampler
 #from qiskit.utils import QuantumInstance
 from qutip.core.metrics import tracedist
@@ -179,7 +180,9 @@ class QuantCircuitEnv(gym.Env):
         self.has_run = False
         self.goal_accuracy = 0.97
         self.previous_accuracy=0
+        self.current_accuracy=0
 
+    
     
     
     def callback_func(self,theta_eval, custo_eval):
@@ -189,13 +192,24 @@ class QuantCircuitEnv(gym.Env):
         plt.plot(range(len(self.custo_vals)), self.custo_vals)
         plt.show()
         
+    def get_num_actions(self):
+        return self.num_actions
+        
     def kernel_creation(self):
+        # Create an empty noise model
+        noise_model = NoiseModel()
+
+        # Add depolarizing error to all single qubit u1, u2, u3 gates
+        error = depolarizing_error(0.05, 1)
+        noise_model.add_all_qubit_quantum_error(error,instructions=['u1', 'u2', 'u3','h','z','i','id'])
         self.qcircuit.append(self.feature_map, range(self.num_qubits))
+        transpiled=transpile(self.qcircuit,backend=AerSimulator(),optimization_level=3)
+        self.job=AerSimulator(noise_model=noise_model).run(self.qcircuit)
         sampler=Sampler()
         fidelity=ComputeUncompute(sampler=sampler)
         print('FEATURE MAP:')
         print(self.qcircuit)
-        kernel=FidelityQuantumKernel(feature_map=self.qcircuit,fidelity=fidelity)
+        kernel=FidelityQuantumKernel(feature_map=transpiled,fidelity=fidelity)
         kernel_matrix = kernel.evaluate(self.X_train)
     
         # Stampa la matrice del kernel
@@ -209,7 +223,8 @@ class QuantCircuitEnv(gym.Env):
         
         return kernel
     
-    
+    def get_action_space(self):
+        return self.action_space_n
 
     """def reset(self):
         
@@ -229,6 +244,7 @@ class QuantCircuitEnv(gym.Env):
             diff = self.comp_goal - self.comp_state
 
         return diff
+    """
     """
     def reset(self):
     
@@ -264,9 +280,52 @@ class QuantCircuitEnv(gym.Env):
             diff = np.append(np.real(diff), np.imag(diff))
         else:
             diff = self.comp_goal - self.comp_state
+            
+        
 
         # Return the difference (the state that the agent is working to minimize)
         return diff
+        """
+    def reset(self):
+        # Reset the quantum circuit to a clean state with initialized qubits
+        self.qcircuit = QuantumCircuit(self.q_reg)
+
+        # Reset the current state/unitary to the initial state
+        self.current_state = Statevector.from_label('0' * self.num_qubits)
+        self.current_unitary = qeye(2**self.num_qubits).full()  # Identity matrix as the initial unitary
+
+        # Reset the classical state used to compute differences
+        self.comp_state = np.append(np.real(self.current_state.data), np.imag(self.current_state.data))
+
+        # Reset counter for gates and steps used by the agent
+        self.gate_count = 0
+        self.step_count = 0
+
+        # Reset the agent's accuracy tracking
+        self.previous_accuracy = 0  # Start with 0 accuracy at the reset
+        self.current_accuracy = self.current_accuracy
+
+        # Calculate the accuracy difference (this will be the 'diff')
+        diff = self.current_accuracy - self.previous_accuracy
+
+        # Reset the flag for checking if the environment has been initialized
+        self.has_run = False
+
+        # Create an info dictionary with additional information
+        info = {
+            'gate_count': self.gate_count,
+            'step_count': self.step_count,
+            'previous_accuracy': self.previous_accuracy,
+            'current_accuracy': self.current_accuracy,
+            'has_run': self.has_run,
+            'circuit':self.qcircuit
+        }
+
+        # Update previous accuracy to current accuracy for next steps
+        self.previous_accuracy = self.current_accuracy
+
+        # Return the accuracy difference (diff) and the info dictionary
+        return diff, info
     
     def step(self, action):
         
@@ -335,7 +394,7 @@ class QuantCircuitEnv(gym.Env):
         """
             
 
-        reward = 0
+        reward = 0.0
 
         # Reward inversely proportional to number of gates used if fidelity is hit
         """if round(self.fidelity(), 3) == 1:
@@ -360,12 +419,12 @@ class QuantCircuitEnv(gym.Env):
         # Evaluate circuit accuracy
         diff=0
         # Reward based on accuracy
-        if self.step_count > 5:
+        if self.step_count >= 5:
             accuracy = self.evaluate_circuit()
             self.has_run=True
 
             # Applica una funzione sigmoide all'accuratezza per ottenere la reward
-            reward = 10 * (1 / (1 + np.exp(-10 * (accuracy - 0.75))))  # Sigmoide centrata intorno a 0.75
+            reward =  1 / (1 + np.exp(-70 * (accuracy - 0.99)))  # Sigmoide centrata intorno a 0.98
 
             # Penalizza per il numero di step
             if self.step_count > 20:
@@ -384,10 +443,10 @@ class QuantCircuitEnv(gym.Env):
                 print("Episode finished due to step limit.")
                 
                 diff = self.goal_accuracy - accuracy
-
+        reward=float(reward)
         return diff, reward, done, {'fidelity': round(self.fidelity(), 3)}
 
-
+    
     
     def define_goal(self, goal_state):
         """
@@ -422,7 +481,9 @@ class QuantCircuitEnv(gym.Env):
             action (int): a specific action in the circuit environment action space
 
         """
+        
         action = np.random.randint(0, self.action_space_n)
+        print("l'azione schelta è:"+str(action))
         return action
 
     def fidelity(self):
@@ -841,7 +902,8 @@ class QuantCircuitEnv(gym.Env):
         self.qcircuit.t(target)
         self.qcircuit.t(control)
 
-       
+    def get_quantum_circuit(self):
+        return self.qcircuit
 
     def evaluate_circuit(self,num_samples=10) -> bool:
         """X=self.X_train
@@ -923,7 +985,7 @@ class QuantCircuitEnv(gym.Env):
 
             print(f"QSVC classification train score: {qsvc_score_train}")
             print(f"QSVC classification test score: {qsvc_score_test}")
-            self.previous_accuracy=qsvc_score_test
+            self.current_accuracy=qsvc_score_test
             self.has_run=False
         return qsvc_score_test
         
