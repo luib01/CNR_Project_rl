@@ -126,7 +126,9 @@ class QuantCircuitEnv(gym.Env):
 
         # Initialise qiskit circuit object
         self.q_reg = QuantumRegister(self.num_qubits)
+        self.q_composed=QuantumRegister(self.num_qubits)
         self.qcircuit = QuantumCircuit(self.q_reg)
+        self.qcircuit.name = 'Quantum Circuit'
         self.custo_vals = []
         self.theta_vals = []
         self.X_train=X_train
@@ -134,6 +136,7 @@ class QuantCircuitEnv(gym.Env):
         self.X_test=X_test
         self.Y_test=Y_test
         self.feature_map = feature_map
+        self.composed_circuit = QuantumCircuit(self.q_composed)
         
         
         
@@ -193,7 +196,7 @@ class QuantCircuitEnv(gym.Env):
         plt.show()
         
     def get_num_actions(self):
-        return self.num_actions
+        return self.action_space_n
         
     def kernel_creation(self):
         # Create an empty noise model
@@ -202,22 +205,23 @@ class QuantCircuitEnv(gym.Env):
         # Add depolarizing error to all single qubit u1, u2, u3 gates
         error = depolarizing_error(0.05, 1)
         noise_model.add_all_qubit_quantum_error(error,instructions=['u1', 'u2', 'u3','h','z','i','id'])
-        self.qcircuit.append(self.feature_map, range(self.num_qubits))
-        transpiled=transpile(self.qcircuit,backend=AerSimulator(),optimization_level=3)
-        self.job=AerSimulator(noise_model=noise_model).run(self.qcircuit)
+        self.composed_circuit.append(self.qcircuit, range(self.num_qubits))
+        self.composed_circuit.append(self.feature_map, range(self.num_qubits))
+        transpiled=transpile(self.composed_circuit,backend=AerSimulator(noise_model=noise_model),optimization_level=3)
+        #self.job=AerSimulator(noise_model=noise_model).run(transpiled)
         sampler=Sampler()
         fidelity=ComputeUncompute(sampler=sampler)
         print('FEATURE MAP:')
-        print(self.qcircuit)
+        print(self.composed_circuit)
         kernel=FidelityQuantumKernel(feature_map=transpiled,fidelity=fidelity)
-        kernel_matrix = kernel.evaluate(self.X_train)
+        #kernel_matrix = kernel.evaluate(self.X_train)
     
         # Stampa la matrice del kernel
-        print('Matrice del kernel:')
-        print(kernel_matrix)
+        #print('Matrice del kernel:')
+        #print(kernel_matrix)
         
         # Stampa il numero di features del kernel
-        print('Il numero di features è:', str(kernel.num_features))
+        #print('Il numero di features è:', str(kernel.num_features))
         
     
         
@@ -288,22 +292,28 @@ class QuantCircuitEnv(gym.Env):
         """
     def reset(self):
         # Reset the quantum circuit to a clean state with initialized qubits
-        self.qcircuit = QuantumCircuit(self.q_reg)
+        if self.step_count>=5:
+            self.qcircuit = QuantumCircuit(self.q_reg)
+       
+            
+        
+        
 
-        # Reset the current state/unitary to the initial state
-        self.current_state = Statevector.from_label('0' * self.num_qubits)
-        self.current_unitary = qeye(2**self.num_qubits).full()  # Identity matrix as the initial unitary
+            # Reset the current state/unitary to the initial state
+            self.current_state = Statevector.from_label('0' * self.num_qubits)
+            self.current_unitary = qeye(2**self.num_qubits).full()  # Identity matrix as the initial unitary
 
-        # Reset the classical state used to compute differences
-        self.comp_state = np.append(np.real(self.current_state.data), np.imag(self.current_state.data))
+            # Reset the classical state used to compute differences
+            self.comp_state = np.append(np.real(self.current_state.data), np.imag(self.current_state.data))
 
-        # Reset counter for gates and steps used by the agent
-        self.gate_count = 0
-        self.step_count = 0
+            # Reset counter for gates and steps used by the agent
+            self.gate_count = 0
+            self.step_count = 0
 
         # Reset the agent's accuracy tracking
         self.previous_accuracy = 0  # Start with 0 accuracy at the reset
         self.current_accuracy = self.current_accuracy
+        self.composed_circuit = QuantumCircuit(self.q_composed)
 
         # Calculate the accuracy difference (this will be the 'diff')
         diff = self.current_accuracy - self.previous_accuracy
@@ -419,12 +429,12 @@ class QuantCircuitEnv(gym.Env):
         # Evaluate circuit accuracy
         diff=0
         # Reward based on accuracy
-        if self.step_count >= 5:
+        if self.step_count >= 1 and self.step_count <= 5:
             accuracy = self.evaluate_circuit()
             self.has_run=True
 
             # Applica una funzione sigmoide all'accuratezza per ottenere la reward
-            reward =  1 / (1 + np.exp(-70 * (accuracy - 0.99)))  # Sigmoide centrata intorno a 0.98
+            reward = 10*( 1 / (1 + np.exp(-70 * (accuracy - 0.97))))  # Sigmoide centrata intorno a 0.98
 
             # Penalizza per il numero di step
             if self.step_count > 20:
@@ -975,7 +985,7 @@ class QuantCircuitEnv(gym.Env):
             print(self.Y_test)
             qsvc = QSVC(quantum_kernel=self.kernel_creation())
             qsvc.fit(self.X_train, self.Y_train)
-            predict=qsvc.predict(self.X_test)
+            #predict=qsvc.predict(self.X_test)
             #print(predict)
             #print(self.Y_test)
             
@@ -987,6 +997,7 @@ class QuantCircuitEnv(gym.Env):
             print(f"QSVC classification test score: {qsvc_score_test}")
             self.current_accuracy=qsvc_score_test
             self.has_run=False
+            self.composed_circuit = QuantumCircuit(self.q_composed)
         return qsvc_score_test
         
 """def make_curriculum(self, num_gates, loop_list=None):
