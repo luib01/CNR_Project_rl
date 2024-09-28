@@ -502,12 +502,27 @@ class QuantCircuitEnv(gym.Env):
                 gate_function(gate_qubits[0])
 
         # Valutazione del circuito
+        
+            
         if self.step_count >= 1 and self.step_count <= 5:
             accuracy = self.evaluate_circuit()
             self.has_run = True
+            if self.step_count==1:
+                
+                self.previous_accuracy=accuracy
+                diff_accuracy=accuracy
+                print("Prima itrazione:"+str(diff_accuracy))
+            else:
+                diff_accuracy=accuracy-self.previous_accuracy
+                self.previous_accuracy=accuracy
+            
 
             # Applica una funzione sigmoide all'accuratezza per ottenere la ricompensa
-            reward = 100 * (1 / (1 + np.exp(-15 * (accuracy - 0.90))))  # Sigmoide centrata intorno a 0.50
+            #reward = 100 * (1 / (1 + np.exp(-15 * (accuracy - 0.90))))  # Sigmoide centrata intorno a 0.50
+            
+            # Funzione sigmoide scalata per restituire valori tra -1 e 1
+            
+            reward = 2 / (1 + np.exp(-15 * diff_accuracy)) - 1
 
             # Penalizza per il numero di passi
             if self.step_count > 100:
@@ -1108,7 +1123,7 @@ class QuantCircuitEnv(gym.Env):
             self.current_accuracy=qsvc_score_test
             self.has_run=False
             self.composed_circuit = QuantumCircuit(self.q_composed)
-        return qsvc_score_test
+        return qsvc_score_train
         # Esegui il circuito su un simulatore e calcola l'accuratezza
         
             
