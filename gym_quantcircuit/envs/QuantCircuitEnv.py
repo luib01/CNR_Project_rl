@@ -766,11 +766,16 @@ class QuantCircuitEnv(gym.Env):
                     for qubit_c in range(self.num_qubits):
                         # Verifica la connettività e che i qubit non siano lo stesso
                         if self.connectivity[qubit_t, qubit_c] == 1 and qubit_t != qubit_c:
+                            print("qubit_t: ",gates, qubit_t, qubit_c)
                             gate_list.append(((qubit_t, qubit_c), gates))
             else:
                 # Gestione per porte a singolo qubit
                 for i in range(self.num_qubits):
+                    print("qubit_i: ",gates, i)
                     gate_list.append(((i,), gates))
+                    
+                    
+            print("gate_list: ",gate_list)
 
         return gate_list
 
